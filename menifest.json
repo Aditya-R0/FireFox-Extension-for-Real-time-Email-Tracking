@@ -1,0 +1,37 @@
+{
+  "manifest_version": 2,
+  "name": "Email Tracker",
+  "version": "1.0",
+  "description": "Tracks email opens and marks read emails in Gmail.",
+  "permissions": [
+    "storage",
+    "notifications",
+    "https://mail.google.com/*",
+    "https://pixelgen.onrender.com/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["content.js", "inbox.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_popup": "popup/popup.html"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
