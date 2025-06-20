@@ -1,88 +1,68 @@
-// Track compose windows
-const composeObserver = new MutationObserver(() => {
-  const composeBox = document.querySelector('[aria-label="Message Body"]');
-  if (composeBox && !composeBox.dataset.trackerAdded) {
-    composeBox.dataset.trackerAdded = "true";
-    setupComposerTracking(composeBox);
-  }
+console.log("🚀 Email Tracker content script loaded");
+
+// Configuration
+const SERVER_URL = "https://pixelgen.onrender.com/create";
+
+// Track injected compose boxes to prevent duplicates
+const trackedBoxes = new WeakSet();
+
+// Observe for new compose boxes
+const observer = new MutationObserver(() => {
+  const composeBoxes = document.querySelectorAll('[aria-label="Message Body"][contenteditable="true"]');
+  console.log("📝 Compose boxes found:", composeBoxes.length);
+
+  composeBoxes.forEach(box => {
+    if (trackedBoxes.has(box)) return;
+    trackedBoxes.add(box);
+    
+    // No visual debug borders
+    console.log("🟠 Compose box detected and marked.");
+    
+    // Store pixel injection status directly on box
+    box.dataset.trackerEnabled = "true";
+    
+    // Inject on first input OR after 5 seconds (whichever comes first)
+    const injectOnce = async () => {
+      if (box.querySelector('img[data-tracker]')) return;
+      
+      const pixel = document.createElement('img');
+      pixel.src = await getPixelUrl();
+      pixel.style.display = 'none';
+      pixel.alt = '';
+      pixel.setAttribute('data-tracker', 'true');
+      box.appendChild(pixel);
+      
+      console.log("🟢 Pixel injected:", pixel.src);
+      
+      // Cleanup after injection
+      box.removeEventListener('input', injectOnce);
+      clearTimeout(timeoutId);
+    };
+
+    // 1. Inject on first user input
+    box.addEventListener('input', injectOnce, { once: true });
+    
+    // 2. Backup: Inject after 5 seconds if no input
+    const timeoutId = setTimeout(injectOnce, 5000);
+  });
 });
+observer.observe(document.body, { childList: true, subtree: true });
 
-// Track inbox for read indicators
-const inboxObserver = new MutationObserver(() => {
-  if (location.href.includes("inbox")) updateInboxIndicators();
-});
-
-// Start observers
-composeObserver.observe(document.body, { childList: true, subtree: true });
-inboxObserver.observe(document.body, { childList: true, subtree: true });
-
-// Initialize immediately
-updateInboxIndicators();
-
-/**
- * Sets up tracking for a compose window
- */
-function setupComposerTracking(composeBox) {
-  const sendButton = document.querySelector('[aria-label="Send"]');
-  if (!sendButton) return;
-
-  sendButton.addEventListener('click', async () => {
+// Get pixel URL from server
+async function getPixelUrl() {
+  try {
     const subject = document.querySelector('[name="subjectbox"]')?.value || "No Subject";
     const recipient = document.querySelector('[name="to"]')?.textContent || "Unknown";
-    
-    // Generate and inject tracking pixel
-    const pixelUrl = await createTrackingPixel(subject, recipient);
-    injectPixel(composeBox, pixelUrl);
-  });
-}
-
-/**
- * Creates a tracking pixel via Render server
- */
-async function createTrackingPixel(subject, recipient) {
-  const response = await fetch('https://your-render-app.onrender.com/create', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subject, recipient })
-  });
-  const data = await response.json();
-  return data.url;
-}
-
-/**
- * Injects pixel into email body
- */
-function injectPixel(composeBox, url) {
-  const pixel = document.createElement('img');
-  pixel.src = url;
-  pixel.style.display = 'none';
-  pixel.alt = '';
-  composeBox.appendChild(pixel);
-}
-
-/**
- * Adds read indicators to inbox
- */
-async function updateInboxIndicators() {
-  const emails = document.querySelectorAll('div[role="main"] tr[role="row"]');
-  
-  // Get tracking data from background
-  const { trackedEmails = {} } = await chrome.storage.local.get('trackedEmails');
-  
-  emails.forEach(email => {
-    const subjectEl = email.querySelector('[data-legacy-thread-id] span');
-    if (!subjectEl || email.querySelector('.email-tracker-icon')) return;
-    
-    const subject = subjectEl.textContent.trim();
-    const emailId = email.dataset.legacyThreadId;
-    
-    // Check if email has been opened
-    if (trackedEmails[emailId]?.opened) {
-      const icon = document.createElement('span');
-      icon.className = 'email-tracker-icon';
-      icon.innerHTML = '✅';
-      icon.style.marginLeft = '8px';
-      subjectEl.parentNode.appendChild(icon);
-    }
-  });
+    const response = await fetch(SERVER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, recipient })
+    });
+    const data = await response.json();
+    console.log("🔗 Pixel URL received:", data.url);
+    return data.url;
+  } catch (error) {
+    console.error("❌ Failed to get pixel URL:", error);
+    return "https://pixelgen.onrender.com/tracker/fallback.png";
+  }
 }
