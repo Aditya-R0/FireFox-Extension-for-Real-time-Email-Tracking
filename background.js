@@ -1,30 +1,30 @@
-// Background script for email tracking extension
+console.log("🌐 Background script started");
 
 // Configuration
 const CHECK_API_URL = "https://pixelgen.onrender.com/check";
 
-// Tracked pixels storage: { pixelId: { tabId, subject, recipient, notified } }
+// Tracked pixels storage
 const trackedPixels = new Map();
 
-// 1. Listen for new pixel injections from content.js
+// 1. Listen for new pixel registrations
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "registerPixel") {
     const { pixelId, subject, recipient } = message;
     
-    // Store pixel metadata with tab ID
     trackedPixels.set(pixelId, {
       tabId: sender.tab.id,
       subject,
       recipient,
-      notified: false // Track notification status
+      notified: false
     });
     
-    console.log(`📬 Registered new pixel: ${pixelId}`);
+    console.log(`📬 Registered pixel: ${pixelId} (${subject} to ${recipient})`);
     sendResponse({ status: "registered" });
   }
+  return true; // Keep message channel open
 });
 
-// Add to background.js
+// Cleanup closed tabs
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const [pixelId, data] of trackedPixels) {
     if (data.tabId === tabId) {
@@ -34,27 +34,29 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-
 // 2. Periodically check pixel status
 async function checkPixelStatus() {
+  console.log("🔄 Checking pixel statuses...");
   for (const [pixelId, data] of trackedPixels) {
-    if (data.notified) continue; // Skip already notified pixels
+    if (data.notified) {
+      console.log(`⏩ Pixel ${pixelId} already notified, skipping`);
+      continue;
+    }
     
     try {
+      console.log(`🌐 Checking pixel: ${pixelId}`);
       const response = await fetch(`${CHECK_API_URL}?id=${pixelId}`);
       const result = await response.json();
+      console.log(`📊 Pixel ${pixelId} status: ${result.ips?.length || 0} IPs`);
       
-      // 3. Check if email was opened (≥2 unique IPs)
       if (result.ips && result.ips.length >= 2) {
-        // 4. Notify content.js to show tick
+        console.log(`✨ Triggering notification for pixel: ${pixelId}`);
         chrome.tabs.sendMessage(data.tabId, {
           action: "showTick",
           pixelId: pixelId
         });
         
-        // Mark as notified
         trackedPixels.get(pixelId).notified = true;
-        console.log(`✅ Notified tab ${data.tabId} for pixel ${pixelId}`);
       }
     } catch (error) {
       console.error(`⚠️ Pixel check failed: ${pixelId}`, error);
@@ -64,3 +66,7 @@ async function checkPixelStatus() {
 
 // Check every 30 seconds
 setInterval(checkPixelStatus, 30000);
+console.log("⏱️ Status checker started (30s interval)");
+
+// Initial check after startup
+setTimeout(checkPixelStatus, 5000);
