@@ -31,6 +31,15 @@ const observer = new MutationObserver(() => {
       pixel.alt = '';
       pixel.setAttribute('data-tracker', 'true');
       box.appendChild(pixel);
+
+      const pixelId = pixel.src.split('/').pop().split('.')[0]; // Extract ID from URL
+
+        chrome.runtime.sendMessage({
+        action: "registerPixel",
+        pixelId: pixelId,
+        subject: subject,
+        recipient: recipient
+      });
       
       console.log("🟢 Pixel injected:", pixel.src);
       
@@ -66,3 +75,27 @@ async function getPixelUrl() {
     return "https://pixelgen.onrender.com/tracker/fallback.png";
   }
 }
+
+// Helper to find sent email (implementation needed)
+function findSentEmail(pixelId) {
+  // DOM traversal logic to locate the sent email
+  // Should match based on subject/recipient or data attribute
+  return document.querySelector(`[data-pixel-id="${pixelId}"]`);
+}
+
+// Listen for tick notifications from background.js
+chrome.runtime.onMessage.addListener((request) => {
+  if (request.action === "showTick") {
+    // Find sent email by pixel ID (implement this)
+    const emailElement = findSentEmail(request.pixelId);
+    
+    if (emailElement) {
+      // Add tick icon
+      const tick = document.createElement('span');
+      tick.innerHTML = '✅';
+      tick.style.marginLeft = '8px';
+      emailElement.appendChild(tick);
+    }
+  }
+});
+

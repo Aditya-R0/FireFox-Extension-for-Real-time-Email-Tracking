@@ -5,12 +5,14 @@
   "description": "Tracks email opens and marks read emails in Gmail.",
   "permissions": [
     "storage",
+    "tabs",
     "notifications",
     "https://mail.google.com/*",
     "https://pixelgen.onrender.com/*"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
