@@ -1,165 +1,253 @@
-console.log("🚀 Email Tracker content script loaded");
+console.log("Email Tracker content script loaded");
+function normalizeSubject(str) {
+  return str
+    .replace(/^(Re:|Fwd:|FW:)\s*/i, '') // Remove common prefixes
+    .replace(/\s+/g, ' ')               // Collapse whitespace
+    .trim()
+    .toLowerCase();
+}
 
 // Configuration
 const SERVER_URL = "https://pixelgen.onrender.com/create";
-
-// Track injected compose boxes to prevent duplicates
 const trackedBoxes = new WeakSet();
 
-// Debugging state
-console.log("🔍 Initializing MutationObserver...");
-
-// Main processing function
-function processComposeBoxes() {
+// Observer for compose windows
+const observer = new MutationObserver(() => {
   const composeBoxes = document.querySelectorAll('[aria-label="Message Body"][contenteditable="true"]');
-  console.log(`📝 Compose boxes found: ${composeBoxes.length}`);
-
+  
   composeBoxes.forEach(box => {
-    if (trackedBoxes.has(box)) {
-      console.log("⏩ Already tracked compose box, skipping");
-      return;
-    }
-    
+    if (trackedBoxes.has(box)) return;
     trackedBoxes.add(box);
-    console.log("🟠 New compose box detected");
     
-    // Store injection status
-    box.dataset.trackerEnabled = "true";
-    
-    // Inject on first input OR after 5 seconds
+    // Inject on first input
     const injectOnce = async () => {
-      if (box.querySelector('img[data-tracker]')) {
-        console.log("⏩ Pixel already exists, skipping injection");
-        return;
-      }
+      if (box.dataset.trackerInjected) return;
+      box.dataset.trackerInjected = "true";
       
       try {
-        // Re-query subject/recipient at injection time
-        const subject = document.querySelector('[name="subjectbox"]')?.value || "No Subject";
-        const recipient = document.querySelector('[name="to"]')?.textContent || "Unknown";
-        console.log(`✉️ Preparing pixel for: "${subject}" to ${recipient}`);
+        // Get subject with modern Gmail selector
+        const subjectField = document.querySelector('input[aria-label="Subject"]') || 
+                            document.querySelector('[name="subjectbox"]');
+        const subject = subjectField?.value || "No Subject";
         
+        // Get recipient with modern Gmail selector
+        const recipientField = document.querySelector('[aria-label="To"]') || 
+                             document.querySelector('[name="to"]');
+        const recipient = recipientField?.textContent || recipientField?.innerText || "Unknown";
+        
+        // Extract thread ID from URL
+        const threadIdMatch = window.location.href.match(/compose\/([a-zA-Z0-9]+)/);
+        const threadId = threadIdMatch ? threadIdMatch[1] : "unknown";
+        
+        // Get pixel URL
+        const response = await fetch(SERVER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subject, recipient })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        const pixelUrl = data.url;
+        
+        // Extract pixel ID
+        const pixelId = pixelUrl.split('/').pop().replace('.png', '');
+        
+        // Register with background script
+        browser.runtime.sendMessage({
+          action: "register_email",
+          pixelId: pixelId,
+          subject: subject,
+          recipient: recipient,
+          threadId: threadId
+        });
+        
+        // Create and inject pixel
         const pixel = document.createElement('img');
-        pixel.src = await getPixelUrl(subject, recipient);
+        pixel.src = pixelUrl;
         pixel.style.display = 'none';
         pixel.alt = '';
         pixel.setAttribute('data-tracker', 'true');
         box.appendChild(pixel);
-
-        // Extract pixel ID
-        const pixelId = pixel.src.split('/').pop().split('.')[0];
-        console.log(`🟢 Pixel injected: ${pixelId}`);
-
-        // Register with background
-        chrome.runtime.sendMessage({
-          action: "registerPixel",
-          pixelId: pixelId,
-          subject: subject,
-          recipient: recipient
-        });
+        
+        console.log("🟢 Pixel injected:", pixelId);
       } catch (error) {
         console.error("❌ Pixel injection failed:", error);
       }
-      
-      // Cleanup listeners
-      box.removeEventListener('input', injectOnce);
-      clearTimeout(timeoutId);
     };
 
-    // 1. Inject on first user input
+    // Event listeners
     box.addEventListener('input', injectOnce, { once: true });
-    console.log("👂 Listening for first input...");
     
-    // 2. Backup: Inject after 5 seconds
-    const timeoutId = setTimeout(() => {
-      console.log("⏱️ 5s timeout reached, injecting pixel");
-      injectOnce();
-    }, 5000);
-  });
-}
-
-// Create observer with delay for Gmail's dynamic UI
-setTimeout(() => {
-  const observer = new MutationObserver(processComposeBoxes);
-  observer.observe(document.body, { childList: true, subtree: true });
-  console.log("🔍 Observer started with 1s delay");
-  
-  // Initial check
-  processComposeBoxes();
-}, 1000);
-
-// Get pixel URL from server
-async function getPixelUrl(subject, recipient) {
-  console.log("🌐 Requesting pixel URL from server...");
-  try {
-    const response = await fetch(SERVER_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subject, recipient })
+    // Watch for send button to ensure injection before send
+    const sendObserver = new MutationObserver(() => {
+      if (document.querySelector('[aria-label="Send"][data-tooltip="Send"]')) {
+        injectOnce();
+      }
     });
-    const data = await response.json();
-    console.log("🔗 Server response:", data.url);
-    return data.url;
-  } catch (error) {
-    console.error("❌ Pixel URL fetch failed:", error);
-    return "https://pixelgen.onrender.com/tracker/fallback.png";
-  }
+    sendObserver.observe(box, { childList: true, subtree: true });
+  });
+});
+
+observer.observe(document.body, { childList: true, subtree: true });
+
+// Read indicator functions
+let updateTimeout;
+function throttledUpdate() {
+  clearTimeout(updateTimeout);
+  updateTimeout = setTimeout(updateReadIndicators, 1000);
 }
 
-// Find sent email in Gmail's UI
-function findSentEmail(pixelId) {
-  console.log(`🔍 Searching for sent email with pixel: ${pixelId}`);
-  try {
-    // Gmail's sent item row structure
-    const emailRows = document.querySelectorAll('tr[data-message-id]');
-    console.log(`📩 Found ${emailRows.length} email rows`);
-    
-    for (const row of emailRows) {
-      // Extract subject and recipient from row
-      const subjectElement = row.querySelector('.bog span');
-      const recipientElement = row.querySelector('.yP');
-      
-      if (subjectElement && recipientElement) {
-        const subject = subjectElement.textContent.trim();
-        const recipient = recipientElement.textContent.trim();
-        
-        // Check if matches tracked pixel
-        if (subject && recipient) {
-          console.log(`ℹ️ Checking: "${subject}" to ${recipient}`);
-          // This should match your storage logic
-          if (`${subject}-${recipient}` === pixelId) {
-            console.log("✅ Matching sent email found");
-            return row;
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.error("❌ Error finding sent email:", error);
-  }
-  return null;
-}
-
-// Listen for tick notifications
-chrome.runtime.onMessage.addListener((request) => {
-  if (request.action === "showTick") {
-    console.log(`✅ Received showTick for pixel: ${request.pixelId}`);
-    const emailElement = findSentEmail(request.pixelId);
-    
-    if (emailElement) {
-      // Check if tick already exists
-      if (!emailElement.querySelector('.email-tracker-tick')) {
-        const tick = document.createElement('span');
-        tick.className = 'email-tracker-tick';
-        tick.innerHTML = '✅';
-        tick.style.marginLeft = '8px';
-        emailElement.appendChild(tick);
-        console.log("🟢 Tick added to sent email");
-      } else {
-        console.log("⏩ Tick already exists");
-      }
-    } else {
-      console.log("❌ Couldn't find sent email for pixel");
-    }
+// ENHANCED MESSAGE LISTENER WITH DEBUG
+browser.runtime.onMessage.addListener((message) => {
+  console.log('[CONTENT DEBUG] Received message:', message);
+  if (message.action === "update_read_status") {
+    console.log('[CONTENT DEBUG] Triggering read indicator update');
+    throttledUpdate();
   }
 });
+
+// ENHANCED updateReadIndicators WITH EXTENSIVE DEBUG
+async function updateReadIndicators() {
+  console.log('[CONTENT DEBUG] Starting updateReadIndicators');
+  
+  try {
+    const response = await browser.runtime.sendMessage({ action: "get_tracked_emails" });
+    const trackedEmails = response.trackedEmails || {};
+    
+    console.log('[CONTENT DEBUG] Received tracked emails:', trackedEmails);
+    console.log('[CONTENT DEBUG] Number of tracked emails:', Object.keys(trackedEmails).length);
+    
+    // Try different Gmail selectors
+    const emailSelectors = [
+      'tr[role="row"][data-legacy-thread-id]',
+      'tr[jsaction*="click"]',
+      '.zA',
+      '[data-thread-id]',
+      'tr.zA'
+    ];
+    
+    let emailRows = [];
+    for (const selector of emailSelectors) {
+      emailRows = document.querySelectorAll(selector);
+      console.log(`[CONTENT DEBUG] Selector "${selector}" found ${emailRows.length} rows`);
+      if (emailRows.length > 0) break;
+    }
+    
+    if (emailRows.length === 0) {
+      console.log('[CONTENT DEBUG] No email rows found with any selector');
+      return;
+    }
+    
+    console.log('[CONTENT DEBUG] Processing', emailRows.length, 'email rows');
+    
+    emailRows.forEach((row, index) => {
+      console.log(`[CONTENT DEBUG] Processing row ${index}:`, row);
+      
+      // Try different ways to get thread ID
+      const threadId = row.dataset.legacyThreadId || 
+                      row.dataset.threadId || 
+                      row.getAttribute('data-legacy-thread-id') ||
+                      row.getAttribute('data-thread-id');
+      
+      console.log(`[CONTENT DEBUG] Row ${index} threadId:`, threadId);
+      
+      // Try different subject selectors
+       const subjectSelectors = [
+        '.bog',                    // Most common Gmail subject selector
+        '[data-tooltip*="subject"]',
+        '.yW span',
+        '.bqe .bog',
+        '.yW .bog',               // Another common pattern
+        '.yW .bqg',               // Gmail uses this sometimes
+        'span[title*="subject"]',  // Fallback
+        '.zA .bog',               // Sent folder pattern
+        'span[email]'             // Keep as last resort (this was wrong)
+      ];
+            
+      let subjectElement = null;
+      for (const selector of subjectSelectors) {
+        subjectElement = row.querySelector(selector);
+        if (subjectElement) {
+          console.log(`[CONTENT DEBUG] Found subject with selector "${selector}"`);
+          break;
+        }
+      }
+      
+      if (!subjectElement) {
+        console.log(`[CONTENT DEBUG] No subject element found in row ${index}`);
+        return;
+      }
+      
+      // --- Robust subject extraction ---
+      let subjectText = subjectElement.getAttribute('title') ||
+                        subjectElement.textContent.trim() ||
+                        subjectElement.innerText.trim() ||
+                        '';
+
+      // Debug: Show all possible subject values
+      console.log(`[CONTENT DEBUG] subjectElement.title: "${subjectElement.getAttribute('title')}"`);
+      console.log(`[CONTENT DEBUG] subjectElement.textContent: "${subjectElement.textContent}"`);
+      console.log(`[CONTENT DEBUG] subjectElement.innerText: "${subjectElement.innerText}"`);
+      console.log(`[CONTENT DEBUG] subjectText (used for matching): "${subjectText}"`);
+
+      // Normalize the subject for comparison
+      const normalizedSubjectText = normalizeSubject(subjectText);
+      console.log(`[CONTENT DEBUG] normalizedSubjectText: "${normalizedSubjectText}"`);
+
+      // Show all normalized tracked subjects
+      const trackedEmailSubjects = Object.values(trackedEmails).map(e => normalizeSubject(e.subject));
+      console.log(`[CONTENT DEBUG] All normalized tracked subjects:`, trackedEmailSubjects);
+
+      // --- Robust matching: fuzzy and normalized ---
+      const trackedEmail = Object.values(trackedEmails).find(email => {
+        const normalizedTracked = normalizeSubject(email.subject);
+        const match = email.opened && (
+          normalizedTracked === normalizedSubjectText ||
+          normalizedSubjectText.includes(normalizedTracked) ||
+          normalizedTracked.includes(normalizedSubjectText)
+        );
+        console.log(`[CONTENT DEBUG] Comparing "${normalizedSubjectText}" with "${normalizedTracked}", opened: ${email.opened}, match: ${match}`);
+        return match;
+      });
+
+      console.log(`[CONTENT DEBUG] Matched tracked email:`, trackedEmail);
+      
+
+
+      // Add indicator if needed
+      if (trackedEmail && !row.querySelector('.email-read-indicator')) {
+        console.log(`[CONTENT DEBUG] Adding tick mark for email:`, trackedEmail);
+        
+        const checkmark = document.createElement('span');
+        checkmark.className = 'email-read-indicator';
+        checkmark.textContent = '✓';
+        checkmark.style.cssText = `
+          color: #4CAF50 !important;
+          margin-left: 8px !important;
+          font-weight: bold !important;
+          font-size: 14px !important;
+          display: inline-block !important;
+        `;
+        checkmark.title = `Opened at ${new Date(trackedEmail.openedAt).toLocaleString()}`;
+        
+        subjectElement.appendChild(checkmark);
+        console.log(`[CONTENT DEBUG] ✅ Tick mark added successfully`);
+      } else if (trackedEmail) {
+        console.log(`[CONTENT DEBUG] Tick mark already exists for this email`);
+      }
+    });
+  } catch (error) {
+    console.error("[CONTENT DEBUG] Error updating read indicators:", error);
+  }
+}
+
+// Initial check and periodic updates
+setInterval(throttledUpdate, 10000);
+throttledUpdate();
+
+// MANUAL TEST FUNCTION - Call this in console to test
+window.testReadIndicators = updateReadIndicators;
