@@ -24,6 +24,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// Add to background.js
+chrome.tabs.onRemoved.addListener((tabId) => {
+  for (const [pixelId, data] of trackedPixels) {
+    if (data.tabId === tabId) {
+      trackedPixels.delete(pixelId);
+      console.log(`🗑️ Removed pixel ${pixelId} (tab closed)`);
+    }
+  }
+});
+
+
 // 2. Periodically check pixel status
 async function checkPixelStatus() {
   for (const [pixelId, data] of trackedPixels) {

@@ -32,9 +32,14 @@ const observer = new MutationObserver(() => {
       pixel.setAttribute('data-tracker', 'true');
       box.appendChild(pixel);
 
-      const pixelId = pixel.src.split('/').pop().split('.')[0]; // Extract ID from URL
+      // Extract pixelId from URL
+      const pixelId = pixel.src.split('/').pop().split('.')[0];
+      
+      // ADD THESE LINES - Re-query subject and recipient
+      const subject = document.querySelector('[name="subjectbox"]')?.value || "No Subject";
+      const recipient = document.querySelector('[name="to"]')?.textContent || "Unknown";
 
-        chrome.runtime.sendMessage({
+      chrome.runtime.sendMessage({
         action: "registerPixel",
         pixelId: pixelId,
         subject: subject,
@@ -47,6 +52,7 @@ const observer = new MutationObserver(() => {
       box.removeEventListener('input', injectOnce);
       clearTimeout(timeoutId);
     };
+
 
     // 1. Inject on first user input
     box.addEventListener('input', injectOnce, { once: true });

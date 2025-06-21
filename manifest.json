@@ -3,8 +3,7 @@
   "name": "Email Tracker",
   "version": "1.0",
   "background": {
-    "scripts": ["background.js"],
-    "persistent": false
+    "scripts": ["background.js"]
   },
   "permissions": ["tabs", "storage"],
   "content_scripts": [
